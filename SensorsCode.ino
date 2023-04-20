@@ -171,9 +171,12 @@ void vibrationSensor() {
   sensors_event_t event;
   accel.getEvent(&event);
 
+  float x = event.acceleration.x;
+  float y = event.acceleration.y;
   float z = event.acceleration.z;
+  float rms = sqrt((x*x) + (y*y) + (z*z));
   Serial.print("Vibration Intensity (g):");
-  Serial.println(z);
+  Serial.println(rms);
   delay(50);
 
 }
@@ -281,7 +284,8 @@ void setup() {
   if (!accel.begin()) {
     Serial.println("Couldn't detect ADXL345!");
   }
-  accel.setRange(ADXL345_RANGE_16_G);
+  accel.setRange(ADXL345_RANGE_2_G);
+  Serial.println(accel.getRange());
   for (int i = 0; i < numReadings; i++) {
     readings[i] = 0;
   }
