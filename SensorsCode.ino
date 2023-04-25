@@ -39,7 +39,9 @@ const int vibrationInputPin = 36;
 // Vibration sensor parameters
 ////////////////////////////////////////////////////////////////////////////////////////
 Adafruit_ADXL345_Unified accel = Adafruit_ADXL345_Unified(12345);
-
+bool vibrationBaselined = false;
+float baselineVibration = 0.0;
+int lastDetectionVibration = 0;
 
 ////////////////////////////////////////////////////////////////////////////////////////
 // Proximity sensor parameters
@@ -136,7 +138,7 @@ void lightModule() {
   float lux = lightSensor.readLightLevel();
   static unsigned long lastIncrementTime = 0;
   // Check if 10 minutes has passed
-  if (millis() - lastIncrementTime >= 3000) {
+  if (millis() - lastIncrementTime >= 600000 && !lightDetected) {
     lastIncrementTime = millis();
     readings[currentIndex] = lux;
     currentIndex++;
@@ -157,8 +159,10 @@ void lightModule() {
   if (lux >= baseline + 40.0) {
     // Sudden increase in light detected
     lightDetected = true;
+    Serial.println("Increase in light");
   } else if (lux <= baseline - 40.0) {
     lightDetected = true;
+    Serial.println("Decrease in light");
     // Sudden decrease in light detected
   } else {
     lightDetected = false;
@@ -175,8 +179,23 @@ void vibrationSensor() {
   float y = event.acceleration.y;
   float z = event.acceleration.z;
   float rms = sqrt((x*x) + (y*y) + (z*z));
-  Serial.print("Vibration Intensity (g):");
-  Serial.println(rms);
+  if (!vibrationBaselined) {
+    baselineVibration = rms;
+    Serial.println(baselineVibration);
+    vibrationBaselined = true;
+  } else {
+    if (rms >= baselineVibration + 0.2 || rms <= baselineVibration - 0.2){
+      Serial.println("Sudden vibration");
+      vibrationDetected = true;
+      lastDetectionVibration = millis();
+    } else if (vibrationDetected && millis() - lastDetectionVibration > 5000) {
+      vibrationDetected = false;
+      Serial.println("Vibration ended");
+    }
+  }
+  
+//  Serial.print("Vibration Intensity (g):");
+//  Serial.println(rms);
   delay(50);
 
 }
@@ -320,10 +339,10 @@ void setup() {
 }
 
 void loop() {
-  //motionSensor();
-  //proximitySensor();
+  motionSensor();
+  proximitySensor();
   vibrationSensor();
-  //lightModule();
+  lightModule();
 
   int activeSensors = motionDetected + proximityDetected + lightDetected + vibrationDetected;
 
