@@ -7,6 +7,8 @@
 #include <BLEUtils.h>
 #include <BLEServer.h>
 #include <ArduinoJson.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 
 #if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
@@ -16,6 +18,11 @@
 #if !defined(CONFIG_BT_SPP_ENABLED)
 #error Serial Bluetooth not available or not enabled. It is only available for the ESP32 chip.
 #endif
+
+TaskHandle_t vibrationThread;
+TaskHandle_t motionThread;
+TaskHandle_t proximityThread;
+TaskHandle_t lightThread;
 
 ////////////////////////////////////////////////////////////////////////////////////////
 // Bluetooth Parameters
@@ -159,16 +166,22 @@ void lightModule() {
   if (lux >= baseline + 40.0) {
     // Sudden increase in light detected
     lightDetected = true;
-    Serial.println("Increase in light");
   } else if (lux <= baseline - 40.0) {
     lightDetected = true;
-    Serial.println("Decrease in light");
     // Sudden decrease in light detected
   } else {
     lightDetected = false;
   }
   
 }
+
+void lightTask(void* parameters) {
+  while (true) {
+    lightModule();
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+}
+
 
 void vibrationSensor() {
 
@@ -184,7 +197,7 @@ void vibrationSensor() {
     Serial.println(baselineVibration);
     vibrationBaselined = true;
   } else {
-    if (rms >= baselineVibration + 0.2 || rms <= baselineVibration - 0.2){
+    if (rms >= baselineVibration + 0.1 || rms <= baselineVibration - 0.1){
       Serial.println("Sudden vibration");
       vibrationDetected = true;
       lastDetectionVibration = millis();
@@ -199,6 +212,14 @@ void vibrationSensor() {
   delay(50);
 
 }
+
+void vibrationTask(void *parameters) {
+  while (true) {
+    vibrationSensor();
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+}
+
 
 void motionSensor() {
   if (digitalRead(motionSensorInputPin) == HIGH) {
@@ -242,6 +263,13 @@ void motionSensor() {
       Serial.println(" sec");
       delay(50);
     }
+  }
+}
+
+void motionTask(void* parameters) {
+  while (true) {
+    motionSensor();
+    vTaskDelay(pdMS_TO_TICKS(20));
   }
 }
 
@@ -293,6 +321,14 @@ void proximitySensor() {
     //proximityDetected = false;
   }
 }
+
+void proximityTask(void* parameters) {
+  while (true) {
+    proximitySensor();
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+}
+
 void setup() {
   pinMode(motionSensorInputPin, INPUT);
   pinMode(trigPin, OUTPUT);
@@ -336,13 +372,17 @@ void setup() {
   }
   Serial.println(" done");
   Serial.println("SENSOR ACTIVE");
+  xTaskCreatePinnedToCore(vibrationTask, "Vibration task", 10000, NULL, 1, &vibrationThread, 0);
+  xTaskCreatePinnedToCore(motionTask, "Motion task", 10000, NULL, 1, &motionThread, 0);
+  //xTaskCreatePinnedToCore(proximityTask, "Proximity task", 10000, NULL, 1, &proximityThread, 1);
+  xTaskCreatePinnedToCore(lightTask, "Light task", 10000, NULL, 1, &lightThread, 1);
 }
 
 void loop() {
-  motionSensor();
-  proximitySensor();
-  vibrationSensor();
-  lightModule();
+  //motionSensor();
+  //proximitySensor();
+  //vibrationSensor();
+  //lightModule();
 
   int activeSensors = motionDetected + proximityDetected + lightDetected + vibrationDetected;
 
