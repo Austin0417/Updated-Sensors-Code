@@ -7,6 +7,9 @@
 #include <BLEUtils.h>
 #include <BLEServer.h>
 #include <ArduinoJson.h>
+#include "FS.h"
+#include "SD.h"
+#include "SPI.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -144,8 +147,8 @@ void sendBluetoothMessage(String message, BLECharacteristic* characteristic) {
 void lightModule() {
   float lux = lightSensor.readLightLevel();
   static unsigned long lastIncrementTime = 0;
-  // Check if 10 minutes has passed
-  if (millis() - lastIncrementTime >= 600000 && !lightDetected) {
+  // Check if 5 minutes have passed
+  if (millis() - lastIncrementTime >= 300000 && !lightDetected) {
     lastIncrementTime = millis();
     readings[currentIndex] = lux;
     currentIndex++;
@@ -163,12 +166,15 @@ void lightModule() {
    baseline = lux;
    isBaseline = true; 
   }
+  
+  // Sudden increase in light detected
   if (lux >= baseline + 40.0) {
-    // Sudden increase in light detected
     lightDetected = true;
+
+  // Sudden decrease in light detected
   } else if (lux <= baseline - 40.0) {
     lightDetected = true;
-    // Sudden decrease in light detected
+    
   } else {
     lightDetected = false;
   }
@@ -329,6 +335,18 @@ void proximityTask(void* parameters) {
   }
 }
 
+void appendFile(const char* path, const char* message) {
+  File file = SD.open(path, FILE_APPEND);
+  if (!file) {
+    Serial.println("Couldn't open file!");
+    return;
+  }
+  if (!file.println(message)) {
+    Serial.println("Couldn't write to file!");
+  }
+  file.close();
+}
+
 void setup() {
   pinMode(motionSensorInputPin, INPUT);
   pinMode(trigPin, OUTPUT);
@@ -364,6 +382,11 @@ void setup() {
   advertising->setMinPreferred(0x12);
   BLEDevice::startAdvertising();
   Serial.println("BLE setup complete!\n");
+  
+  SPI.begin();
+  if (SD.begin(5)) {
+    Serial.println("SD card setup success");
+  }
 
   Serial.print("calibrating sensor ");
   for (int i = 0; i < calibrationTime; i++) {
@@ -372,60 +395,78 @@ void setup() {
   }
   Serial.println(" done");
   Serial.println("SENSOR ACTIVE");
-  xTaskCreatePinnedToCore(vibrationTask, "Vibration task", 10000, NULL, 1, &vibrationThread, 0);
-  xTaskCreatePinnedToCore(motionTask, "Motion task", 10000, NULL, 1, &motionThread, 0);
-  //xTaskCreatePinnedToCore(proximityTask, "Proximity task", 10000, NULL, 1, &proximityThread, 1);
-  xTaskCreatePinnedToCore(lightTask, "Light task", 10000, NULL, 1, &lightThread, 1);
+//  xTaskCreatePinnedToCore(vibrationTask, "Vibration task", 10000, NULL, 1, &vibrationThread, 0);
+//  xTaskCreatePinnedToCore(motionTask, "Motion task", 10000, NULL, 1, &motionThread, 0);
+//  xTaskCreatePinnedToCore(proximityTask, "Proximity task", 10000, NULL, 1, &proximityThread, 1);
+//  xTaskCreatePinnedToCore(lightTask, "Light task", 10000, NULL, 1, &lightThread, 1);
 }
 
 void loop() {
-  //motionSensor();
-  //proximitySensor();
-  //vibrationSensor();
-  //lightModule();
+  motionSensor();
+  proximitySensor();
+  vibrationSensor();
+  lightModule();
 
   int activeSensors = motionDetected + proximityDetected + lightDetected + vibrationDetected;
+  jsonData["motion"] = motionDetected;
+  jsonData["proximity"] = proximityDetected;
+  jsonData["light"] = lightDetected;
+  jsonData["vibration"] = vibrationDetected;
+  jsonData["lightIntensity"] = baseline;
 
+  static int lastSamplingTime = 0;
+  
   if (activeSensors >= 2) {
     ///////////////////////////////////////////////////////////////////////////////////////////////////////
     // Two or more of the sensors are reading high (person is present)
     ///////////////////////////////////////////////////////////////////////////////////////////////////////
+
     timeOfDetection = millis();
     minutes = 0;
     jsonData["status"] = "Person is present";
     jsonData["lastDetected"] = 0;
     serializeJson(jsonData, stringData);
     if (previousMessage != "Person is present") {
+      Serial.println("Two or more sensors");
       sendBluetoothMessage(stringData, characteristic);
       Serial.println(stringData);
       previousMessage = "Person is present";
+      appendFile("data.txt", stringData.c_str());
     }
-    stringData = "";
-
-
+    //stringData = "";
+    
   } else {
     /////////////////////////////////////////////////////////////////////////////////////////////////////
     // All sensors read low (person is absent or not being detected for an extended period of time)
     /////////////////////////////////////////////////////////////////////////////////////////////////////
-
+    
     lastDetected = ((millis() - timeOfDetection) / 1000);
     //Serial.println(lastDetected);
     jsonData["status"] = "Not present";
 
     if (previousMessage != "Not present") {
+      Serial.println("No detection");
       minutes = 0;
       jsonData["lastDetected"] = minutes;
       serializeJson(jsonData, stringData);
       sendBluetoothMessage(stringData, characteristic);
       Serial.println(stringData);
       previousMessage = "Not present";
+      appendFile("data.txt", stringData.c_str());
     } else if (lastDetected % 60 == 0) {
       minutes = lastDetected / 60;
       jsonData["lastDetected"] = minutes;
       serializeJson(jsonData, stringData);
       Serial.println(stringData);
       sendBluetoothMessage(stringData, characteristic);
+
     }
-    stringData = "";
+    //stringData = "";
   }
+  if (millis() - lastSamplingTime >= 600000) {
+    lastSamplingTime = millis();
+    sendBluetoothMessage(stringData, characteristic);
+    appendFile("data.txt", stringData.c_str());
+  }
+  stringData = "";
 }
