@@ -147,11 +147,15 @@ void sendBluetoothMessage(String message, BLECharacteristic* characteristic) {
 void lightModule() {
   float lux = lightSensor.readLightLevel();
   static unsigned long lastIncrementTime = 0;
-  // Check if 5 minutes have passed
+  
+  // Check if 5 minutes have passed, store the current lux reading into the array
   if (millis() - lastIncrementTime >= 300000 && !lightDetected) {
     lastIncrementTime = millis();
     readings[currentIndex] = lux;
     currentIndex++;
+
+    // After populating the array with 6 values, start computing the average, which will serve as the new baseline
+    // Goal is to account for changes in ambient light over the course of a day
     if (currentIndex > numReadings - 1) {
       currentIndex = 0;
       float average = 0;
@@ -162,6 +166,8 @@ void lightModule() {
       baseline = average;
     }
   }
+
+  // Identical approach to vibration and proximity sensor, set a baseline value to compare future readings to
   if (!isBaseline) {
    baseline = lux;
    isBaseline = true; 
@@ -198,15 +204,22 @@ void vibrationSensor() {
   float y = event.acceleration.y;
   float z = event.acceleration.z;
   float rms = sqrt((x*x) + (y*y) + (z*z));
+  
+  // Initial setup of baseline value for vibration sensor (units are m/s^2)
   if (!vibrationBaselined) {
     baselineVibration = rms;
     Serial.println(baselineVibration);
     vibrationBaselined = true;
+
+  // After obtaining baseline value, compare current readings with baseline. If they differ by an offset of 0.1,
+  // conclude that there is movement in the room/person present in the room
   } else {
     if (rms >= baselineVibration + 0.1 || rms <= baselineVibration - 0.1){
       Serial.println("Sudden vibration");
       vibrationDetected = true;
       lastDetectionVibration = millis();
+
+    // If 5 seconds have passed since the vibraton has detected, conclude that the person's movement has ended
     } else if (vibrationDetected && millis() - lastDetectionVibration > 5000) {
       vibrationDetected = false;
       Serial.println("Vibration ended");
@@ -246,10 +259,6 @@ void motionSensor() {
   if (digitalRead(motionSensorInputPin) == LOW) {
     lastLowMotion = millis();
     if (lastLowMotion - lastActiveMotion > 15000) {
-      // Checking if the motion sensor was LOW for longer than 15 seconds after a HIGH
-      //      Serial.print("No motion detected in the last ");
-      //      Serial.print((millis() - lastActiveMotion) / 1000);
-      //      Serial.print(" seconds\n");
       noRecentMotion = true;
     }
     if (takeLowTime) {
@@ -289,6 +298,8 @@ void proximitySensor() {
   duration = pulseIn(echoPin, HIGH);
 
   distance = duration * 0.034 / 2;
+
+  // Obtaining baseline value for the proximity sensor, to compare future readings with
   if (!isCalibrated) {
     calibratedValue = distance;
     isCalibrated = true;
@@ -297,9 +308,12 @@ void proximitySensor() {
     Serial.print(" cm");
   }
 
+  // Comparing the baseline value with the current readings.
+  // If the readings differ from the baseline value by + or - 5 cm, this means that someone has walked in front of the proximtiy sensor
   if (distance < calibratedValue - 5 || distance > calibratedValue + 5) {
     lastActiveProximity = millis();
     proximityDetected = true;
+    
     if (proximityLockLow) {
       //makes sure we wait for a transition to LOW before any further output is made:
       Serial.println("Proximity");
@@ -307,17 +321,14 @@ void proximitySensor() {
       delay(50);
     }
     proximityTakeLowTime = true;
-    //    Serial.print("Person detected at ");
-    //    Serial.print(millis() / 1000);
-    //    Serial.print(" seconds\n");
-    //    Serial.print("Distance is : ");
-    //    Serial.print(distance);
-    //    Serial.print(" cm\n");
+    
   } else {
     if (proximityTakeLowTime) {
       proximityLowIn = millis();
       proximityTakeLowTime = false;
     }
+
+    // If the proximity sensor has not read HIGH for more than the defined pause time, conclude that the person has left the room
     if (!proximityLockLow && millis() - proximityLowIn > proximityPause) {
       proximityLockLow = true;
       proximityDetected = false;
@@ -415,12 +426,11 @@ void loop() {
   jsonData["lightIntensity"] = baseline;
 
   static int lastSamplingTime = 0;
-  
-  if (activeSensors >= 2) {
-    ///////////////////////////////////////////////////////////////////////////////////////////////////////
-    // Two or more of the sensors are reading high (person is present)
-    ///////////////////////////////////////////////////////////////////////////////////////////////////////
 
+  ///////////////////////////////////////////////////////////////////////////////////////////////////////
+  // Two or more of the sensors are reading high (person is present)
+  ///////////////////////////////////////////////////////////////////////////////////////////////////////
+  if (activeSensors >= 2) {
     timeOfDetection = millis();
     minutes = 0;
     jsonData["status"] = "Person is present";
@@ -433,17 +443,15 @@ void loop() {
       previousMessage = "Person is present";
       appendFile("data.txt", stringData.c_str());
     }
-    //stringData = "";
-    
-  } else {
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    // All sensors read low (person is absent or not being detected for an extended period of time)
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    
+
+  /////////////////////////////////////////////////////////////////////////////////////////////////////
+  // All sensors read low (person is absent or not being detected for an extended period of time)
+  /////////////////////////////////////////////////////////////////////////////////////////////////////
+  } else {    
     lastDetected = ((millis() - timeOfDetection) / 1000);
-    //Serial.println(lastDetected);
     jsonData["status"] = "Not present";
 
+    // This if statement will be called when first transitioning from "Person detected" to "Not present"
     if (previousMessage != "Not present") {
       Serial.println("No detection");
       minutes = 0;
@@ -453,6 +461,8 @@ void loop() {
       Serial.println(stringData);
       previousMessage = "Not present";
       appendFile("data.txt", stringData.c_str());
+
+    // If person isn't detected, keep track of last detection in minutes
     } else if (lastDetected % 60 == 0) {
       minutes = lastDetected / 60;
       jsonData["lastDetected"] = minutes;
@@ -461,7 +471,6 @@ void loop() {
       sendBluetoothMessage(stringData, characteristic);
 
     }
-    //stringData = "";
   }
   if (millis() - lastSamplingTime >= 600000) {
     lastSamplingTime = millis();
