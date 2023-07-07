@@ -47,14 +47,19 @@ const int vibrationInputPin = 36;
 
 ////////////////////////////////////////////////////////////////////////////////////////
 // Vibration sensor parameters
+// ADXL345 SDA pin goes to GIOP21
+// ADXL345 SCL pin goes to GIOP 22
 ////////////////////////////////////////////////////////////////////////////////////////
 Adafruit_ADXL345_Unified accel = Adafruit_ADXL345_Unified(12345);
 bool vibrationBaselined = false;
 float baselineVibration = 0.0;
 int lastDetectionVibration = 0;
+float vibrationIntensity;
 
 ////////////////////////////////////////////////////////////////////////////////////////
 // Proximity sensor parameters
+// Trig pin goes to GIOP 2
+// Echo pin goes to GIOP 15
 ////////////////////////////////////////////////////////////////////////////////////////
 long duration;
 int distance;
@@ -63,11 +68,13 @@ bool isCalibrated = false;
 unsigned int lastActiveProximity = 0;
 boolean proximityLockLow = true;
 boolean proximityTakeLowTime;
-long unsigned int proximityPause = 15000;
+long unsigned int proximityPause = 3000;
 long unsigned int proximityLowIn;
 
 ////////////////////////////////////////////////////////////////////////////////////////
 // Light Sensor Parameters
+// BH1750 SDA pin goes to GIOP 21
+// BH1750 SCL pin goes to GIOP 22
 ////////////////////////////////////////////////////////////////////////////////////////
 BH1750 lightSensor;
 int currentIndex = 0;
@@ -76,9 +83,11 @@ float readings[numReadings];
 bool isBaseline = false;
 float baseline = 0;
 int timePeriod = 0;
+float lightIntensity;
 
 ////////////////////////////////////////////////////////////////////////////////////////
 // Motion sensor parameters
+// Motion Sensor input pin (middle) goes to GIOP 14
 ////////////////////////////////////////////////////////////////////////////////////////
 bool noRecentMotion;
 //the time when the sensor outputs a low impulse
@@ -88,7 +97,7 @@ long unsigned int lowIn;
 //the amount of milliseconds the sensor has to be low
 //before we assume all motion has stopped
 ////////////////////////////////////////////////////////////////////////////////////////
-long unsigned int pause_ = 15000;
+long unsigned int pause_ = 3000;
 boolean lockLow = true;
 boolean takeLowTime;
 unsigned int lastLowMotion = 0;
@@ -146,6 +155,7 @@ void sendBluetoothMessage(String message, BLECharacteristic* characteristic) {
 
 void lightModule() {
   float lux = lightSensor.readLightLevel();
+  lightIntensity = lux;
   static unsigned long lastIncrementTime = 0;
 
 
@@ -205,6 +215,8 @@ void vibrationSensor() {
   float y = event.acceleration.y;
   float z = event.acceleration.z;
   float rms = sqrt((x * x) + (y * y) + (z * z));
+
+  vibrationIntensity = rms;
 
   // Initial setup of baseline value for vibration sensor (units are m/s^2)
   if (!vibrationBaselined) {
@@ -310,7 +322,7 @@ void proximitySensor() {
 
   // Comparing the baseline value with the current readings.
   // If the readings differ from the baseline value by + or - 5 cm, this means that someone has walked in front of the proximtiy sensor
-  if (distance < calibratedValue - 5 || distance > calibratedValue + 5) {
+  if (distance < calibratedValue - 30 || distance > calibratedValue + 30) {
     lastActiveProximity = millis();
     proximityDetected = true;
 
@@ -419,11 +431,20 @@ void loop() {
   lightModule();
 
   int activeSensors = motionDetected + proximityDetected + lightDetected + vibrationDetected;
+
+  // Boolean Data
   jsonData["motion"] = motionDetected;
   jsonData["proximity"] = proximityDetected;
   jsonData["light"] = lightDetected;
   jsonData["vibration"] = vibrationDetected;
-  jsonData["lightIntensity"] = baseline;
+
+  // Numerical Data
+  jsonData["lightIntensity"] = lightIntensity;
+  jsonData["distance"] = distance;
+  jsonData["vibrationIntensity"] = vibrationIntensity;
+  jsonData["vibrationBaseline"] = baselineVibration;
+  jsonData["proximityBaseline"] = calibratedValue;
+  jsonData["lightBaseline"] = baseline;
 
   static int lastSamplingTime = 0;
 
