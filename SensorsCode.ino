@@ -170,7 +170,7 @@ void lightModule() {
     if (currentIndex > numReadings - 1) {
       currentIndex = 0;
       float average = 0;
-      for (int i = 0; i < numReadings - 1; i++) {
+      for (int i = 0; i < numReadings; i++) {
         average += readings[i];
       }
       average = average / 6.0;
@@ -185,11 +185,11 @@ void lightModule() {
   }
 
   // Sudden increase in light detected
-  if (lux >= baseline + 40.0) {
+  if (lux >= baseline + 10.0) {
     lightDetected = true;
 
     // Sudden decrease in light detected
-  } else if (lux <= baseline - 40.0) {
+  } else if (lux <= baseline - 10.0) {
     lightDetected = true;
 
   } else {
@@ -227,7 +227,7 @@ void vibrationSensor() {
     // After obtaining baseline value, compare current RMS readings with baseline. If they differ by an offset of 0.1,
     // conclude that there is movement in the room/person present in the room
   } else {
-    if (rms >= baselineVibration + 0.1 || rms <= baselineVibration - 0.1) {
+    if (rms >= baselineVibration + 0.15 || rms <= baselineVibration - 0.15) {
       Serial.println("Sudden vibration");
       vibrationDetected = true;
       lastDetectionVibration = millis();
@@ -238,9 +238,7 @@ void vibrationSensor() {
       Serial.println("Vibration ended");
     }
   }
-
   delay(50);
-
 }
 
 void vibrationTask(void *parameters) {
@@ -349,12 +347,13 @@ void proximitySensor() {
     }
     //proximityDetected = false;
   }
+  delay(50);
 }
 
 void proximityTask(void* parameters) {
   while (true) {
     proximitySensor();
-    vTaskDelay(pdMS_TO_TICKS(20));
+    vTaskDelay(pdMS_TO_TICKS(50));
   }
 }
 
@@ -418,10 +417,10 @@ void setup() {
   }
   Serial.println(" done");
   Serial.println("SENSOR ACTIVE");
-  //  xTaskCreatePinnedToCore(vibrationTask, "Vibration task", 10000, NULL, 1, &vibrationThread, 0);
-  //  xTaskCreatePinnedToCore(motionTask, "Motion task", 10000, NULL, 1, &motionThread, 0);
-  //  xTaskCreatePinnedToCore(proximityTask, "Proximity task", 10000, NULL, 1, &proximityThread, 1);
-  //  xTaskCreatePinnedToCore(lightTask, "Light task", 10000, NULL, 1, &lightThread, 1);
+//    xTaskCreatePinnedToCore(vibrationTask, "Vibration task", 10000, NULL, 1, &vibrationThread, 0);
+//    xTaskCreatePinnedToCore(motionTask, "Motion task", 10000, NULL, 1, &motionThread, 0);
+//    xTaskCreatePinnedToCore(proximityTask, "Proximity task", 10000, NULL, 1, &proximityThread, 1);
+//    xTaskCreatePinnedToCore(lightTask, "Light task", 10000, NULL, 1, &lightThread, 1);
 }
 
 void loop() {
