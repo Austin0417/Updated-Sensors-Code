@@ -1,3 +1,5 @@
+#include <array>
+#include <string>
 #include "BluetoothSerial.h"
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
@@ -54,7 +56,114 @@ const int echoPin = 15;
 const int vibrationInputPin = 36;
 const int soundInputPin = 26;
 const int soundGatePin = 27;
- 
+
+
+////////////////////////////////////////////////////////////////////////////////////////
+// Proximity sensor class definition/parameters
+// Trig pin goes to GIOP 2
+// Echo pin goes to GIOP 15
+////////////////////////////////////////////////////////////////////////////////////////
+class UltrasonicSensor {
+  private:
+    int trigger_pin;
+    int echo_pin;
+    long duration;
+    int distance_;
+    int calibratedValue = 0;
+    bool isCalibrated = false;
+    long unsigned int lastActiveProximity = 0;
+    bool proximityLockLow = true;
+    bool proximityTakeLowTime;
+    long unsigned int proximityLowIn;
+
+    // Boolean that indicates status of the ultrasonic sensor (active or nonactive)
+    bool detected = false;
+
+    // Flag that is set to true whenenver the vibration sensor is active
+    // When the system is moved, we need to recalibrate the ultrasonic's baseline
+    static bool shouldRetakeBaseline;
+
+  public:
+    UltrasonicSensor(int trig_pin, int echo_pin) {
+      pinMode(trig_pin, OUTPUT);
+      pinMode(echo_pin, INPUT);
+      trigger_pin = trig_pin;
+      this->echo_pin = echo_pin;
+    }
+
+    int distance() {
+      return distance_;
+    }
+
+    bool isActive() {
+      return detected;
+    }
+
+    static void setBaselineFlag(bool flag) {
+      shouldRetakeBaseline = flag;
+    }
+
+    long unsigned int getDetectionTime() {
+      return lastActiveProximity;
+    }
+
+    int baseline() {
+      return calibratedValue;
+    }
+
+    int calculateDistance() {
+      digitalWrite(trigger_pin, LOW);
+      delayMicroseconds(2);
+      digitalWrite(trigger_pin, HIGH);
+      delayMicroseconds(10);
+      digitalWrite(trigger_pin, LOW);
+
+      duration = pulseIn(echo_pin, HIGH);
+
+      distance_ = duration * 0.034 / 2;
+      return distance_;
+    }
+
+    void compareCurrentWithBaseline() {
+      if (!isCalibrated || shouldRetakeBaseline) {
+        calibratedValue = distance_;
+        isCalibrated = true;
+        Serial.println("Calibrated value is: ");
+        Serial.print(calibratedValue);
+        Serial.print(" cm");
+      }
+      if (distance_ < calibratedValue - 30 || distance_ > calibratedValue + 30) {
+        lastActiveProximity = millis();
+        detected = true;
+        if (proximityLockLow) {
+          //makes sure we wait for a transition to LOW before any further output is made:
+          Serial.println("Proximity");
+          proximityLockLow = false;
+          delay(50);
+        }
+        proximityTakeLowTime = true;
+      }
+      else {
+        if (proximityTakeLowTime) {
+          proximityLowIn = millis();
+          proximityTakeLowTime = false;
+        }
+        if (!proximityLockLow && millis() - proximityLowIn > PROXIMITY_PAUSE) {
+          proximityLockLow = true;
+          detected = false;
+          Serial.println("Proximity ended");
+        }
+      }
+    }
+
+    void start() {
+      int currentDistance = calculateDistance();
+      compareCurrentWithBaseline();
+    }
+};
+
+bool UltrasonicSensor::shouldRetakeBaseline = false;
+
 ////////////////////////////////////////////////////////////////////////////////////////
 // Vibration sensor class definition/parameters
 // ADXL345 SDA pin goes to GIOP21
@@ -93,8 +202,6 @@ class VibrationSensor {
     }
 
     void start() {
-      Serial.print("Vibration running on core: ");
-      Serial.println(xPortGetCoreID());
       sensors_event_t event;
       accel.getEvent(&event);
 
@@ -108,14 +215,16 @@ class VibrationSensor {
         vibrationBaselined = true;
         Serial.println(lights_on_baseline_value);
       } else {
-        if (currentVibration >= lights_on_baseline_value + 0.15 || currentVibration <= lights_on_baseline_value - 0.15) {
+        if (currentVibration >= lights_on_baseline_value + 0.3 || currentVibration <= lights_on_baseline_value - 0.3) {
           Serial.println("Sudden vibration");
           detected = true;
           lastDetectionVibration = millis();
+          UltrasonicSensor::setBaselineFlag(true);
 
           // If 5 seconds have passed since the vibraton has detected, conclude that the person's movement has ended
         } else if (detected && millis() - lastDetectionVibration > VIBRATION_PAUSE) {
           detected = false;
+          UltrasonicSensor::setBaselineFlag(false);
           Serial.println("Vibration ended");
         }
       }
@@ -123,98 +232,6 @@ class VibrationSensor {
     }
 };
 
-////////////////////////////////////////////////////////////////////////////////////////
-// Proximity sensor class definition/parameters
-// Trig pin goes to GIOP 2
-// Echo pin goes to GIOP 15
-////////////////////////////////////////////////////////////////////////////////////////
-class UltrasonicSensor {
-  private:
-    int trigger_pin;
-    int echo_pin;
-    long duration;
-    int distance_;
-    int calibratedValue = 0;
-    bool isCalibrated = false;
-    long unsigned int lastActiveProximity = 0;
-    bool proximityLockLow = true;
-    bool proximityTakeLowTime;
-    long unsigned int proximityLowIn;
-    bool detected;
-
-  public:
-    UltrasonicSensor(int trig_pin, int echo_pin) {
-      pinMode(trig_pin, OUTPUT);
-      pinMode(echo_pin, INPUT);
-      trigger_pin = trig_pin;
-      this->echo_pin = echo_pin;
-    }
-
-    int distance() {
-      return distance_;
-    }
-
-    bool isActive() {
-      return detected;
-    }
-
-    long unsigned int getDetectionTime() { return lastActiveProximity; }
-
-    int baseline() {
-      return calibratedValue;
-    }
-
-    int calculateDistance() {
-      digitalWrite(trigger_pin, LOW);
-      delayMicroseconds(2);
-      digitalWrite(trigger_pin, HIGH);
-      delayMicroseconds(10);
-      digitalWrite(trigger_pin, LOW);
-
-      duration = pulseIn(echo_pin, HIGH);
-
-      distance_ = duration * 0.034 / 2;
-      return distance_;
-    }
-
-    void compareCurrentWithBaseline() {
-      if (!isCalibrated) {
-        calibratedValue = distance_;
-        isCalibrated = true;
-        Serial.println("Calibrated value is: ");
-        Serial.print(calibratedValue);
-        Serial.print(" cm");
-      }
-      if (distance_ < calibratedValue - 30 || distance_ > calibratedValue + 30) {
-        lastActiveProximity = millis();
-        detected = true;
-        if (proximityLockLow) {
-          //makes sure we wait for a transition to LOW before any further output is made:
-          Serial.println("Proximity");
-          proximityLockLow = false;
-          delay(50);
-        }
-        proximityTakeLowTime = true;
-      } else {
-        if (proximityTakeLowTime) {
-          proximityLowIn = millis();
-          proximityTakeLowTime = false;
-        }
-        if (!proximityLockLow && millis() - proximityLowIn > PROXIMITY_PAUSE) {
-          proximityLockLow = true;
-          detected = false;
-          Serial.println("Proximity ended");
-        }
-      }
-    }
-
-    void start() {
-      Serial.print("Ultrasonic running on core: ");
-      Serial.println(xPortGetCoreID());
-      int currentDistance = calculateDistance();
-      compareCurrentWithBaseline();
-    }
-};
 
 ////////////////////////////////////////////////////////////////////////////////////////
 // Sound sensor class definition/parameters
@@ -223,13 +240,21 @@ class UltrasonicSensor {
 class SoundSensor {
   private:
     int currentReading;
-    bool detected;
+    bool detected = false;
     bool soundLockLow = true;
     bool soundTakeLowTime;
     long unsigned int soundLowIn;
+
+    // Average reading, obtained from averaging all of the values in the readings array
     float averageReading = 0;
-    int readings[NUM_SOUND_READINGS];
+
+    // Readings array of integers which will be used to calculate an average value (smoothing the analog reading)
+    std::array<int, NUM_SOUND_READINGS> readings;
+
+    // Int to keep track of current index within the readings array
     int currentIndex = 0;
+    
+    // Boolean flag which will be true (set once and stays true) when the readings array is fully populated
     bool startTakingAverage = false;
 
   public:
@@ -247,12 +272,12 @@ class SoundSensor {
     float getAverageReading() {
       float sum = 0;
       for (int i = 0; i < NUM_SOUND_READINGS; i++) {
-        sum += readings[i];
+        sum += readings.at(i);
       }
       averageReading = (sum / NUM_SOUND_READINGS);
       return averageReading;
     }
-    
+
     float value() {
       return averageReading;
     }
@@ -261,11 +286,11 @@ class SoundSensor {
     }
 
     void start() {
-      Serial.print("Sound running on core: ");
-      Serial.println(xPortGetCoreID());
       currentReading = analogRead(soundInputPin);
       readings[currentIndex] = currentReading;
       currentIndex++;
+
+      // Array is populated, starting calculating average
       if (currentIndex >= NUM_SOUND_READINGS) {
         currentIndex = 0;
         startTakingAverage = true;
@@ -273,7 +298,7 @@ class SoundSensor {
       if (startTakingAverage) {
         getAverageReading();
       }
-      
+
       if (digitalRead(soundGatePin) == HIGH) {
         Serial.println("Sound detected");
         detected = true;
@@ -282,12 +307,13 @@ class SoundSensor {
           delay(50);
         }
         soundTakeLowTime = true;
-      } else {
+      }
+      if (digitalRead(soundGatePin) == LOW) {
         if (soundTakeLowTime) {
           soundLowIn = millis();
           soundTakeLowTime = false;
         }
-        if (!soundLockLow && millis() - soundLowIn >= SOUND_PAUSE) {
+        if (!soundLockLow && millis() - soundLowIn > SOUND_PAUSE) {
           soundLockLow = true;
           detected = false;
         }
@@ -307,11 +333,11 @@ class LightSensor {
     int currentIndex = 0;
 
     // Array to store periodic values when the light status of the room is on
-    float readings[NUM_LIGHT_READINGS];
+    std::array<float, NUM_LIGHT_READINGS> readings;
     float lights_on_baseline_value = 0;
 
     // Array to store periodic values when the light status of the room is off
-    float readings_lights_off[NUM_LIGHT_READINGS];
+    std::array<float, NUM_LIGHT_READINGS> readings_lights_off;
     float lights_off_baseline_value = 5.0;
 
     bool lights_on_is_baseline = false;
@@ -321,24 +347,38 @@ class LightSensor {
 
     String lightingStatus = "";
     float currentReading;
-    
+
     unsigned long lastIncrementTime = 0;
 
   public:
 
-    float lightValue() { return currentReading; }
+    float lightValue() {
+      return currentReading;
+    }
 
-    bool isActive() { return detected; }
+    bool isActive() {
+      return detected;
+    }
 
-    float baseline() { return lights_on_baseline_value; }
+    float baseline() {
+      return lights_on_baseline_value;
+    }
 
-    float baseline_off() { return lights_off_baseline_value; }
+    float baseline_off() {
+      return lights_off_baseline_value;
+    }
 
-    void setCurrentReading(float reading) { currentReading = reading; }
+    void setCurrentReading(float reading) {
+      currentReading = reading;
+    }
 
-    float* get_readings_lights_on() { return readings; }
+    std::array<float, NUM_LIGHT_READINGS> get_readings_lights_on() {
+      return readings;
+    }
 
-    float* get_readings_lights_off() { return readings_lights_off; }
+    std::array<float, NUM_LIGHT_READINGS> get_readings_lights_off() {
+      return readings_lights_off;
+    }
 
     void setup() {
       for (int i = 0; i < NUM_LIGHT_READINGS; i++) {
@@ -348,15 +388,15 @@ class LightSensor {
       }
     }
 
-    float newBaseline(float* arr) {
+    float newBaseline(std::array<float, NUM_LIGHT_READINGS> arr) {
       float sum = 0;
       int divisor = NUM_LIGHT_READINGS;
       for (int i = 0; i < NUM_LIGHT_READINGS; i++) {
-        if (arr[i] < 0) {
+        if (arr.at(i) < 0) {
           divisor--;
           continue;
         }
-        sum += arr[i];
+        sum += arr.at(i);
       }
       if (divisor == 0) {
         return 0;
@@ -366,11 +406,9 @@ class LightSensor {
     }
 
     void start() {
-      Serial.print("Light running on core: ");
-      Serial.println(xPortGetCoreID());
       setCurrentReading(light_module.readLightLevel());
       if (millis() - lastIncrementTime >= 300000) {
-        
+
         // After 5 minutes and no drastic change in lighting has been detected, store the current reading into float array
         lastIncrementTime = millis();
         if (lightsOn) {
@@ -400,11 +438,11 @@ class LightSensor {
           }
         }
       }
-      
+
       // 1. Determine if room lights are on or off from the light reading
       // 2. If lights are on, the threshold should be set higher for detection. If lights are  off, threshold should be set lower for detection
       // 3. Could try having 2 baselines (one for lights on, one for lights off)
-      
+
       if (currentReading >= 120) {
         // If the current light reading is greater than/equal to 120 lux, conclude that lights in the room are on
         lightsOn = true;
@@ -419,7 +457,7 @@ class LightSensor {
         } else {
           detected = false;
         }
-        
+
       } else {
         // If the current light reading is not greater than or equal to 120 lux, indicates lights are off
         lightsOn = false;
@@ -462,8 +500,6 @@ class MotionSensor {
     }
 
     void start() {
-      Serial.print("Motion running on core: ");
-      Serial.println(xPortGetCoreID());
       if (digitalRead(motionSensorInputPin) == HIGH) {
         detected = true;
         if (lockLow) {
@@ -503,33 +539,44 @@ class MotionSensor {
 
 
 ////////////////////////////////////////////////////////////////////////////////////////
+// Enum definition for whether the door is to the left or right of the system
+////////////////////////////////////////////////////////////////////////////////////////
+enum DoorDirection {
+  LEFT,
+  RIGHT
+};
+
+// Global DoorDirection variable which will be hardcoded depending on placement of the system relative to the door
+const DoorDirection direction = DoorDirection::LEFT;
+
+////////////////////////////////////////////////////////////////////////////////////////
 // calibration time for the sensors to be calibrated
 ////////////////////////////////////////////////////////////////////////////////////////
 const int calibrationTime = 30;
 
 ////////////////////////////////////////////////////////////////////////////////////////
-// boolean to track whether motion was recently detected
+// Dynamically allocated MotionSensor object which will be used for interacting with the motion sensor
 ////////////////////////////////////////////////////////////////////////////////////////
 MotionSensor* motionSensor;
 
 ////////////////////////////////////////////////////////////////////////////////////////
-// boolean to track whether an object was detected in front of the ultrasonic sensor recently
+// Ultrasonic sensor objects for interacting with the ultrasonic sensors
 ////////////////////////////////////////////////////////////////////////////////////////
 UltrasonicSensor* ultrasonicSensor;
 UltrasonicSensor* secondUltrasonicSensor;
 
 ////////////////////////////////////////////////////////////////////////////////////////
-// boolean to track if vibration readings indicate a person walking around in the room
+// Vibration sensor object for interacting with the vibration sensor
 ////////////////////////////////////////////////////////////////////////////////////////
 VibrationSensor* vibrationSensor;
 
 ////////////////////////////////////////////////////////////////////////////////////////
-// boolean to track if light readings indicate a light has been turned on or not
+// Light sensor object
 ////////////////////////////////////////////////////////////////////////////////////////
 LightSensor* lightSensor;
 
 ////////////////////////////////////////////////////////////////////////////////////////
-// boolean to track if light readings indicate a light has been turned on or not
+// Sound sensor object
 ////////////////////////////////////////////////////////////////////////////////////////
 SoundSensor* soundSensor;
 
@@ -548,7 +595,7 @@ unsigned int minutes = 0;     // minutes that have passed since last detection
 ////////////////////////////////////////////////////////////////////////////////////////
 // Global boolean variable indicating the occupation status of the room
 ////////////////////////////////////////////////////////////////////////////////////////
-boolean isOccupied;
+boolean isOccupied = false;
 
 ////////////////////////////////////////////////////////////////////////////////////////
 // JSON Object we will send to the Bluetooth app. It keeps track of the status as well as time since last detection
@@ -563,16 +610,25 @@ void sendBluetoothMessage(String message, BLECharacteristic* characteristic) {
   characteristic->notify();
 }
 
-void appendFile(const char* path, const char* message) {
-  File file = SD.open(path, FILE_APPEND);
-  if (!file) {
-//    Serial.println("Couldn't open file!");
-    return;
+void lightTask(void* parameter) {
+  while (true) {
+    lightSensor->start();
+    vTaskDelay(pdMS_TO_TICKS(50));
   }
-  if (!file.println(message)) {
-    Serial.println("Couldn't write to file!");
+}
+
+void soundTask(void* parameter) {
+  while (true) {
+    soundSensor->start();
+    vTaskDelay(pdMS_TO_TICKS(50));
   }
-  file.close();
+}
+
+void vibrationTask(void* parameter) {
+  while (true) {
+    vibrationSensor->start();
+    vTaskDelay(pdMS_TO_TICKS(50));
+  }
 }
 
 void setup() {
@@ -612,7 +668,7 @@ void setup() {
   Serial.println("BLE setup complete!\n");
 
   SPI.begin();
-  
+
   Serial.print("calibrating sensor ");
   for (int i = 0; i < calibrationTime; i++) {
     Serial.print(".");
@@ -620,27 +676,52 @@ void setup() {
   }
   Serial.println(" done");
   Serial.println("SENSOR ACTIVE");
+  xTaskCreatePinnedToCore(lightTask, "LightTask", 10000, NULL, 0, NULL, 0);
+  xTaskCreatePinnedToCore(soundTask, "SoundTask", 10000, NULL, 0, NULL, 0);
+  xTaskCreatePinnedToCore(vibrationTask, "VibrationTask", 10000, NULL, 0, NULL, 0);
 }
 
 void loop() {
   motionSensor->start();
-  vibrationSensor->start();
-  lightSensor->start();
-  soundSensor->start();
+  //  vibrationSensor->start();
+  //  lightSensor->start();
+  //  soundSensor->start();
 
   // Assume that ultrasonicSensor is the left-most ultrasonic, and secondUltrasonicSensor is the right-most
-   ultrasonicSensor->start();
-//  secondUltrasonicSensor->start();
-  if (ultrasonicSensor->isActive() && secondUltrasonicSensor->isActive()) {
-    // Person is entering the room
-    if (ultrasonicSensor->getDetectionTime() < secondUltrasonicSensor->getDetectionTime()) {
-      isOccupied = true;
-      Serial.println("Room is occupied");
-    // Person is exiting the room  
-    } else if (ultrasonicSensor->getDetectionTime() > secondUltrasonicSensor->getDetectionTime()) {
-      isOccupied = false;
-      Serial.println("Room is not occupied");
-    }
+  ultrasonicSensor->start();
+  secondUltrasonicSensor->start();
+
+  switch (direction) {
+    // Case where door is to the left of the system
+    case LEFT: {
+        if (ultrasonicSensor->isActive() && secondUltrasonicSensor->isActive()) {
+          // Person is entering the room (set status to occupied)
+          if (ultrasonicSensor->getDetectionTime() < secondUltrasonicSensor->getDetectionTime()) {
+            isOccupied = true;
+            Serial.println("Room is occupied");
+            // Person is exiting the room (set status to unoccupied)
+          } else if (ultrasonicSensor->getDetectionTime() > secondUltrasonicSensor->getDetectionTime()) {
+            isOccupied = false;
+            Serial.println("Room is not occupied");
+          }
+        }
+        break;
+      }
+    // Case where door is to the right of the system  
+    case RIGHT: {
+        if (ultrasonicSensor->isActive() && secondUltrasonicSensor->isActive()) {
+          if (ultrasonicSensor->getDetectionTime() < secondUltrasonicSensor->getDetectionTime()) {
+            // Person is exiting the room (set status to unoccupied)
+            isOccupied = false;
+            Serial.println("Room is occupied");
+            // Person is entering the room (set status to occupied)
+          } else if (ultrasonicSensor->getDetectionTime() > secondUltrasonicSensor->getDetectionTime()) {
+            isOccupied = true;
+            Serial.println("Room is not occupied");
+          }
+        }
+        break;
+      }
   }
 
   int activeSensors = motionSensor->isActive() + ultrasonicSensor->isActive() + lightSensor->isActive() + vibrationSensor->isActive();
@@ -651,6 +732,7 @@ void loop() {
   jsonData["light"] = lightSensor->isActive();
   jsonData["vibration"] = vibrationSensor->isActive();
   jsonData["sound"] = soundSensor->isActive();
+  jsonData["occupied"] = isOccupied;
 
   // Numerical Data
   jsonData["lightIntensity"] = lightSensor->lightValue();
@@ -677,45 +759,42 @@ void loop() {
     timeOfDetection = millis();
     minutes = 0;
 
-//    if (previousMessage != "Person is present") {
-//        jsonData["status"] = "Person is present";
-//        jsonData["lastDetected"] = 0;
-//        serializeJson(jsonData, stringData);
-//        sendBluetoothMessage(stringData, characteristic);
-//        previousMessage = "Person is present";
-//        appendFile("data.txt", stringData.c_str());
-//    }
-    
-    jsonData["status"] = "Person is present";
+    //    if (previousMessage != "Person is present") {
+    //        jsonData["status"] = "Person is present";
+    //        jsonData["lastDetected"] = 0;
+    //        serializeJson(jsonData, stringData);
+    //        sendBluetoothMessage(stringData, characteristic);
+    //        previousMessage = "Person is present";
+    //    }
+
+    jsonData["movement_status"] = "Person is present";
     jsonData["lastDetected"] = 0;
     serializeJson(jsonData, stringData);
     sendBluetoothMessage(stringData, characteristic);
     previousMessage = "Person is present";
-    appendFile("data.txt", stringData.c_str());
 
     /////////////////////////////////////////////////////////////////////////////////////////////////////
     // All sensors read low (person is absent or not being detected for an extended period of time)
     /////////////////////////////////////////////////////////////////////////////////////////////////////
   } else {
     lastDetected = ((millis() - timeOfDetection) / 1000);
-    jsonData["status"] = "Not present";
+    jsonData["movement_status"] = "Not present";
 
     // This if statement will be called when first transitioning from "Person detected" to "Not present"
     // Commented out for testing
-//    if (previousMessage != "Not Present") {
-//        jsonData["lastDetected"] = minutes;
-//        serializeJson(jsonData, stringData);
-//        sendBluetoothMessage(stringData, characteristic);
-//        Serial.println(stringData);
-//        previousMessage = "Not present";
-//        appendFile("data.txt", stringData.c_str());
-//    }
+    //    if (previousMessage != "Not Present") {
+    //        jsonData["lastDetected"] = minutes;
+    //        serializeJson(jsonData, stringData);
+    //        sendBluetoothMessage(stringData, characteristic);
+    //        Serial.println(stringData);
+    //        previousMessage = "Not present";
+    //        appendFile("data.txt", stringData.c_str());
+    //    }
 
     jsonData["lastDetected"] = minutes;
     serializeJson(jsonData, stringData);
     sendBluetoothMessage(stringData, characteristic);
     previousMessage = "Not present";
-    appendFile("data.txt", stringData.c_str());
 
     // If person isn't detected, keep track of last detection in minutes
     if (lastDetected >= 60) {
@@ -725,7 +804,6 @@ void loop() {
       jsonData["lastDetected"] = minutes;
       serializeJson(jsonData, stringData);
       sendBluetoothMessage(stringData, characteristic);
-
     }
   }
   stringData = "";
