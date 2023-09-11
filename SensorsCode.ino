@@ -34,6 +34,7 @@ TaskHandle_t lightThread;
 ////////////////////////////////////////////////////////////////////////////////////////
 #define SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+#define SUBSYSTEM_CHARACTERISTIC_UUID "cba1d466-344c-4be3-ab3f-189f80dd7518"
 #define DESCRIPTOR_UUID "00002902-0000-1000-8000-00805f9b34fb"
 
 #define NUM_LIGHT_READINGS 6
@@ -46,6 +47,7 @@ TaskHandle_t lightThread;
 
 BluetoothSerial bluetooth;
 BLECharacteristic* characteristic;
+BLECharacteristic* subsystemCharacteristic;
 
 ////////////////////////////////////////////////////////////////////////////////////////
 // Pin setup for sensors
@@ -56,6 +58,7 @@ const int echoPin = 15;
 const int vibrationInputPin = 36;
 const int soundInputPin = 26;
 const int soundGatePin = 27;
+
 
 
 ////////////////////////////////////////////////////////////////////////////////////////
@@ -603,6 +606,32 @@ boolean isOccupied = false;
 StaticJsonDocument<300> jsonData;
 String stringData;
 
+////////////////////////////////////////////////////////////////////////////////////////
+// BLE Response Class for parsing the response from the subsystem characteristic
+////////////////////////////////////////////////////////////////////////////////////////
+class BLEResponse {
+  private:
+  std::string response_;
+  public:
+  BLEResponse(std::string response) : response_(response) {}
+  void parseResponse() {
+    if (response_ == std::string("Occupied")) {
+      isOccupied = true;
+    } else {
+      isOccupied = false;
+    }
+  }
+  static void parseResponse(std::string response) {
+    if (response == std::string("Occupied")) {
+      isOccupied = true;
+    } else {
+      isOccupied = false;
+    }
+  }
+};
+////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////
+
 void sendBluetoothMessage(String message, BLECharacteristic* characteristic) {
   uint8_t data[message.length() + 1];
   memcpy(data, message.c_str(), message.length());
@@ -634,14 +663,11 @@ void vibrationTask(void* parameter) {
 void setup() {
   motionSensor = new MotionSensor(motionSensorInputPin);
   ultrasonicSensor = new UltrasonicSensor(trigPin, echoPin);
-  secondUltrasonicSensor = new UltrasonicSensor(25, 33);
   lightSensor = new LightSensor;
   vibrationSensor = new VibrationSensor(vibrationInputPin);
-  soundSensor = new SoundSensor(soundInputPin, soundGatePin);
 
   lightSensor->setup();
   vibrationSensor->setup();
-  soundSensor->setup();
   light_module.begin();
 
   Wire.begin();
@@ -652,6 +678,8 @@ void setup() {
   BLEServer* server = BLEDevice::createServer();
   BLEService* service = server->createService(SERVICE_UUID);
   characteristic = service->createCharacteristic(CHARACTERISTIC_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_INDICATE);
+  subsystemCharacteristic = service->createCharacteristic(SUBSYSTEM_CHARACTERISTIC_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_INDICATE);
+  subsystemCharacteristic->setValue("Occupied");
   characteristic->setValue("Test");
   BLEDescriptor descriptor(DESCRIPTOR_UUID);
   uint8_t descriptorValue[] = {0x00, 0x01};
@@ -677,68 +705,32 @@ void setup() {
   Serial.println(" done");
   Serial.println("SENSOR ACTIVE");
   xTaskCreatePinnedToCore(lightTask, "LightTask", 10000, NULL, 0, NULL, 0);
-  xTaskCreatePinnedToCore(soundTask, "SoundTask", 10000, NULL, 0, NULL, 0);
+  //xTaskCreatePinnedToCore(soundTask, "SoundTask", 10000, NULL, 0, NULL, 0);
   xTaskCreatePinnedToCore(vibrationTask, "VibrationTask", 10000, NULL, 0, NULL, 0);
 }
 
 void loop() {
   motionSensor->start();
+  ultrasonicSensor->start();
   //  vibrationSensor->start();
   //  lightSensor->start();
   //  soundSensor->start();
 
-  // Assume that ultrasonicSensor is the left-most ultrasonic, and secondUltrasonicSensor is the right-most
-  ultrasonicSensor->start();
-  secondUltrasonicSensor->start();
+  int activeSensors = motionSensor->isActive() + ultrasonicSensor->isActive() + lightSensor->isActive();
 
-  switch (direction) {
-    // Case where door is to the left of the system
-    case LEFT: {
-        if (ultrasonicSensor->isActive() && secondUltrasonicSensor->isActive()) {
-          // Person is entering the room (set status to occupied)
-          if (ultrasonicSensor->getDetectionTime() < secondUltrasonicSensor->getDetectionTime()) {
-            isOccupied = true;
-            Serial.println("Room is occupied");
-            // Person is exiting the room (set status to unoccupied)
-          } else if (ultrasonicSensor->getDetectionTime() > secondUltrasonicSensor->getDetectionTime()) {
-            isOccupied = false;
-            Serial.println("Room is not occupied");
-          }
-        }
-        break;
-      }
-    // Case where door is to the right of the system  
-    case RIGHT: {
-        if (ultrasonicSensor->isActive() && secondUltrasonicSensor->isActive()) {
-          if (ultrasonicSensor->getDetectionTime() < secondUltrasonicSensor->getDetectionTime()) {
-            // Person is exiting the room (set status to unoccupied)
-            isOccupied = false;
-            Serial.println("Room is occupied");
-            // Person is entering the room (set status to occupied)
-          } else if (ultrasonicSensor->getDetectionTime() > secondUltrasonicSensor->getDetectionTime()) {
-            isOccupied = true;
-            Serial.println("Room is not occupied");
-          }
-        }
-        break;
-      }
-  }
-
-  int activeSensors = motionSensor->isActive() + ultrasonicSensor->isActive() + lightSensor->isActive() + vibrationSensor->isActive();
+  // Read the subsystem characteristic value every loop. The String value could potentially change after a write from the subsystem
+  BLEResponse::parseResponse(subsystemCharacteristic->getValue());
 
   // Boolean Data
   jsonData["motion"] = motionSensor->isActive();
   jsonData["proximity"] = ultrasonicSensor->isActive();
   jsonData["light"] = lightSensor->isActive();
-  jsonData["vibration"] = vibrationSensor->isActive();
-  jsonData["sound"] = soundSensor->isActive();
   jsonData["occupied"] = isOccupied;
 
   // Numerical Data
   jsonData["lightIntensity"] = lightSensor->lightValue();
   jsonData["distance"] = ultrasonicSensor->distance();
   jsonData["vibrationIntensity"] = vibrationSensor->intensity();
-  jsonData["soundIntensity"] = soundSensor->value();
   jsonData["vibrationBaseline"] = vibrationSensor->baseline();
   jsonData["proximityBaseline"] = ultrasonicSensor->baseline();
   jsonData["lightBaseline"] = lightSensor->baseline();
@@ -777,7 +769,7 @@ void loop() {
     // All sensors read low (person is absent or not being detected for an extended period of time)
     /////////////////////////////////////////////////////////////////////////////////////////////////////
   } else {
-    lastDetected = ((millis() - timeOfDetection) / 1000);
+    lastDetected = ((millis() - timeOfDetection) / 1000); // keeps track of time since last detection in seconds
     jsonData["movement_status"] = "Not present";
 
     // This if statement will be called when first transitioning from "Person detected" to "Not present"
