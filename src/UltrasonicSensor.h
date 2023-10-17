@@ -34,11 +34,11 @@ class UltrasonicSensor {
       this->echo_pin = echo_pin;
     }
 
-    int distance() {
+    int distance() const {
       return distance_;
     }
 
-    bool isActive() {
+    bool isActive() const {
       return detected;
     }
 
@@ -46,11 +46,11 @@ class UltrasonicSensor {
       shouldRetakeBaseline = flag;
     }
 
-    long unsigned int getDetectionTime() {
+    long unsigned int getDetectionTime() const {
       return lastActiveProximity;
     }
 
-    int baseline() {
+    int baseline() const {
       return calibratedValue;
     }
 

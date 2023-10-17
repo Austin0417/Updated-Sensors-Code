@@ -18,15 +18,15 @@ class VibrationSensor {
       pinMode(inputPin, INPUT);
     }
 
-    float baseline() {
+    float baseline() const {
       return lights_on_baseline_value;
     }
 
-    bool isActive() {
+    bool isActive() const {
       return detected;
     }
 
-    float intensity() {
+    float intensity() const {
       return currentVibration;
     }
 
@@ -56,11 +56,13 @@ class VibrationSensor {
           detected = true;
           lastDetectionVibration = millis();
           UltrasonicSensor::setBaselineFlag(true);
+          LightSensor::setBaselineFlag(true);
 
           // If 5 seconds have passed since the vibraton has detected, conclude that the person's movement has ended
         } else if (detected && millis() - lastDetectionVibration > VIBRATION_PAUSE) {
           detected = false;
           UltrasonicSensor::setBaselineFlag(false);
+          LightSensor::setBaselineFlag(false);
           Serial.println("Vibration ended");
         }
       }

@@ -15,7 +15,7 @@ class MotionSensor {
     unsigned int lastLowMotion = 0;
     unsigned int lastActiveMotion = 0;
   public:
-    bool isActive() {
+    bool isActive() const {
       return detected;
     }
 

@@ -43,6 +43,8 @@ TaskHandle_t lightThread;
 #define DESCRIPTOR_UUID "00002902-0000-1000-8000-00805f9b34fb"
 #define SUBSYSTEM_DESCRIPTOR "3f0d768b-ddfb-4b46-acdb-e10b904ed065"
 
+#define EMERGENCY_ALERT_TIME 2
+
 BluetoothSerial bluetooth;
 BLECharacteristic* characteristic;
 BLECharacteristic* subsystemCharacteristic;
@@ -146,6 +148,7 @@ String previousMessage = "";
 unsigned int timeOfDetection = 0;
 unsigned int lastDetected = 0;  // time since last detection in seconds
 unsigned int minutes = 0;     // minutes that have passed since last detection
+unsigned int alertMinutes = 0; // this will determine when an alert will be sent (if it's equal to or greater than EMERGENCY_ALERT_TIME
 
 ////////////////////////////////////////////////////////////////////////////////////////
 // Global boolean variable indicating the occupation status of the room
@@ -186,22 +189,22 @@ BLEResponse parser;
 ////////////////////////////////////////////////////////////////////////////////////////
 class TempAdvertise {
   public:
-  virtual void onTempAdvertising(int milliseconds) = 0;
+  virtual void onTempAdvertising(long milliseconds) = 0;
 };
 
 class MyTempAdvertise: public TempAdvertise {
   public:
-  void onTempAdvertising(int milliseconds) override;
+  void onTempAdvertising(long milliseconds) override;
 };
 
-void MyTempAdvertise::onTempAdvertising(int milliseconds) {
+void MyTempAdvertise::onTempAdvertising(long milliseconds) {
   advertising->start();
   delay(milliseconds);
   advertising->stop();
 }
 
 void startTempAdvertising(TempAdvertise* tempAdvertise) {
-  tempAdvertise->onTempAdvertising(60000);
+  tempAdvertise->onTempAdvertising(60000);    // begin BLE advertising for a full minute
 }
 
 MyTempAdvertise* tempAdvertiseCallback = new MyTempAdvertise();
@@ -235,7 +238,6 @@ void vibrationTask(void* parameter) {
     vTaskDelay(pdMS_TO_TICKS(50));
   }
 }
-
 
 
 void setup() {
@@ -295,14 +297,13 @@ void setup() {
 void loop() {
   motionSensor->start();
   ultrasonicSensor->start();
-  //  vibrationSensor->start();
-  //  lightSensor->start();
-  //  soundSensor->start();
 
   int activeSensors = motionSensor->isActive() + ultrasonicSensor->isActive() + lightSensor->isActive();
 
   // Read the subsystem characteristic value every loop. The String value could potentially change after a write from the subsystem
   parser.parseResponse(subsystemCharacteristic->getValue());
+  Serial.print("Light Sensor Baseline: ");
+  Serial.println(lightSensor->baseline());
 
   // Boolean Data
   jsonData["motion"] = motionSensor->isActive();
@@ -335,6 +336,7 @@ void loop() {
   if (activeSensors >= 2) {
     timeOfDetection = millis();
     minutes = 0;
+    alertMinutes = 0;
 
     //    if (previousMessage != "Person is present") {
     //        jsonData["status"] = "Person is present";
@@ -378,9 +380,11 @@ void loop() {
       lastDetected = 0;
       timeOfDetection = millis();
       minutes++;
+      alertMinutes++;
       jsonData["lastDetected"] = minutes;
-      if (minutes >= 2 && parser.getOccupied()) {
+      if (minutes % EMERGENCY_ALERT_TIME == 0 && parser.getOccupied()) {
         // Start advertising and send an alert to the client device
+        alertMinutes = 0;
         startTempAdvertising(tempAdvertiseCallback);
       }
 
@@ -388,6 +392,5 @@ void loop() {
       sendBluetoothMessage(stringData, characteristic);
     }
   }
-  Serial.println(stringData);
   stringData = "";
 }

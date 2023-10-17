@@ -29,21 +29,24 @@ class LightSensor {
 
     unsigned long lastIncrementTime = 0;
 
+    // This will be set to true when significant vibration is detected
+    static bool shouldRetakeBaseline;
+
   public:
 
-    float lightValue() {
+    float lightValue()  const {
       return currentReading;
     }
 
-    bool isActive() {
+    bool isActive() const {
       return detected;
     }
 
-    float baseline() {
+    float baseline() const {
       return lights_on_baseline_value;
     }
 
-    float baseline_off() {
+    float baseline_off() const {
       return lights_off_baseline_value;
     }
 
@@ -51,11 +54,11 @@ class LightSensor {
       currentReading = reading;
     }
 
-    std::array<float, NUM_LIGHT_READINGS> get_readings_lights_on() {
+    std::array<float, NUM_LIGHT_READINGS> get_readings_lights_on() const {
       return readings;
     }
 
-    std::array<float, NUM_LIGHT_READINGS> get_readings_lights_off() {
+    std::array<float, NUM_LIGHT_READINGS> get_readings_lights_off() const {
       return readings_lights_off;
     }
 
@@ -125,8 +128,7 @@ class LightSensor {
       if (currentReading >= 120) {
         // If the current light reading is greater than/equal to 120 lux, conclude that lights in the room are on
         lightsOn = true;
-        if (!lights_on_is_baseline) {
-          delay(1000);
+        if (!lights_on_is_baseline || shouldRetakeBaseline) {
           lights_on_is_baseline = true;
           lights_on_baseline_value = currentReading;
         }
@@ -140,8 +142,7 @@ class LightSensor {
       } else {
         // If the current light reading is not greater than or equal to 120 lux, indicates lights are off
         lightsOn = false;
-        if (!lights_off_is_baseline) {
-          delay(1000);
+        if (!lights_off_is_baseline || shouldRetakeBaseline) {
           lights_off_is_baseline = true;
           lights_off_baseline_value = currentReading;
         }
@@ -154,4 +155,7 @@ class LightSensor {
       }
       delay(50);
     }
+    static void setBaselineFlag(bool flag) { shouldRetakeBaseline = flag; }
 };
+
+bool LightSensor::shouldRetakeBaseline = false;
