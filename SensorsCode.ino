@@ -50,6 +50,7 @@ BLECharacteristic* characteristic;
 BLECharacteristic* subsystemCharacteristic;
 BLEAdvertising* advertising;
 
+// Tracks the number of devices connected to this main system (via BLE)
 int connectedDevices = 0;
 
 ////////////////////////////////////////////////////////////////////////////////////////
@@ -63,11 +64,14 @@ const int soundInputPin = 26;
 const int soundGatePin = 27;
 
 
+// Implementing class for BLEServerCallbacks
 class MyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* server) override;
   void onDisconnect(BLEServer* server) override;
 };
 
+// After the subsystem successfully establishes a connection, the main system will stop advertising to prevent any other connections
+// If for some reason the subsystem is disconnected, begin advertising again to allow it to reconnect
 void MyServerCallbacks::onConnect(BLEServer* server) {
   connectedDevices++;
   if (advertising != nullptr) {
@@ -83,6 +87,7 @@ void MyServerCallbacks::onConnect(BLEServer* server) {
   }
 }
 
+// On subsystem disconnect, if there are no connected devices, begin advertising 
 void MyServerCallbacks::onDisconnect(BLEServer* server) {
   connectedDevices--;  
   Serial.println("Device disconnected");
@@ -93,18 +98,6 @@ void MyServerCallbacks::onDisconnect(BLEServer* server) {
   }
 }
 
-
-////////////////////////////////////////////////////////////////////////////////////////
-// Enum definition for whether the door is to the left or right of the system
-////////////////////////////////////////////////////////////////////////////////////////
-enum DoorDirection {
-  LEFT,
-  RIGHT
-};
-
-
-// Global DoorDirection variable which will be hardcoded depending on placement of the system relative to the door
-const DoorDirection direction = DoorDirection::LEFT;
 
 ////////////////////////////////////////////////////////////////////////////////////////
 // calibration time for the sensors to be calibrated
@@ -162,7 +155,7 @@ String stringData;
 
 
 ////////////////////////////////////////////////////////////////////////////////////////
-// BLE Response Class for parsing the response from the subsystem characteristic
+// BLE Response Class for parsing the response from the subsystem characteristic and setting room occupied status
 ////////////////////////////////////////////////////////////////////////////////////////
 class BLEResponse {
   private:
@@ -185,6 +178,8 @@ class BLEResponse {
   bool getOccupied() { return isOccupied; }
 };
 BLEResponse parser;
+
+
 ////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////
 class TempAdvertise {
@@ -211,6 +206,8 @@ MyTempAdvertise* tempAdvertiseCallback = new MyTempAdvertise();
 ////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////
 
+// Helper method that takes a String message to set the main system's characteristic's value
+// We convert the message into an array of bytes before setting the value, which will be translated to proper characters by the ESP32 via UTF-8
 void sendBluetoothMessage(String message, BLECharacteristic* characteristic) {
   uint8_t data[message.length() + 1];
   memcpy(data, message.c_str(), message.length());
@@ -218,6 +215,7 @@ void sendBluetoothMessage(String message, BLECharacteristic* characteristic) {
   characteristic->notify();
 }
 
+// Tasks/functions for multithreading sensors
 void lightTask(void* parameter) {
   while (true) {
     lightSensor->start();
@@ -255,12 +253,18 @@ void setup() {
   Serial.begin(115200);
   Serial.println("Starting BLE setup...");
   BLEDevice::init("ESP32");
+  
   BLEServer* server = BLEDevice::createServer();
   server->setCallbacks(new MyServerCallbacks());
   BLEService* service = server->createService(SERVICE_UUID);
+
+  // Creating the main characteristic that will hold all of the sensor data
   characteristic = service->createCharacteristic(CHARACTERISTIC_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_INDICATE);
+
+  // Creating the characteristic for the subsystem that will hold the current room's occupation status
   subsystemCharacteristic = service->createCharacteristic(SUBSYSTEM_CHARACTERISTIC_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
   subsystemCharacteristic->setValue("Occupied");
+
   characteristic->setValue("Test");
   BLEDescriptor descriptor(DESCRIPTOR_UUID);
   uint8_t descriptorValue[] = {0x00, 0x01};
@@ -327,8 +331,6 @@ void loop() {
   } else {
     jsonData["lightingStatus"] = "Lights off";
   }
-
-  static int lastSamplingTime = 0;
 
   ///////////////////////////////////////////////////////////////////////////////////////////////////////
   // Two or more of the sensors are reading high (person is present)

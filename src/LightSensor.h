@@ -34,7 +34,7 @@ class LightSensor {
 
   public:
 
-    float lightValue()  const {
+    float lightValue() const {
       return currentReading;
     }
 
@@ -54,11 +54,11 @@ class LightSensor {
       currentReading = reading;
     }
 
-    std::array<float, NUM_LIGHT_READINGS> get_readings_lights_on() const {
+    const std::array<float, NUM_LIGHT_READINGS>& get_readings_lights_on() const {
       return readings;
     }
 
-    std::array<float, NUM_LIGHT_READINGS> get_readings_lights_off() const {
+    const std::array<float, NUM_LIGHT_READINGS>& get_readings_lights_off() const {
       return readings_lights_off;
     }
 
@@ -70,7 +70,7 @@ class LightSensor {
       }
     }
 
-    float newBaseline(std::array<float, NUM_LIGHT_READINGS> arr) {
+    float newBaseline(const std::array<float, NUM_LIGHT_READINGS>& arr) {
       float sum = 0;
       int divisor = NUM_LIGHT_READINGS;
       for (int i = 0; i < NUM_LIGHT_READINGS; i++) {
