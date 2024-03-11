@@ -29,6 +29,7 @@
 #error Serial Bluetooth not available or not enabled. It is only available for the ESP32 chip.
 #endif
 
+// These are the handles to the separate threads. Each individual thread will run one of the sensors
 TaskHandle_t vibrationThread;
 TaskHandle_t motionThread;
 TaskHandle_t proximityThread;
@@ -43,23 +44,38 @@ TaskHandle_t lightThread;
 #define DESCRIPTOR_UUID "00002902-0000-1000-8000-00805f9b34fb"
 #define SUBSYSTEM_DESCRIPTOR "3f0d768b-ddfb-4b46-acdb-e10b904ed065"
 
+#define MOTION_BUFFER_SIZE 500
+#define MOTION_BUFFER_CUTOFF 480
+
+// Emergency alert time in minutes
+// Every n minutes, if there has been no movement detected, an emergency alert will be sent
+// Ex. If EMERGENCY_ALERT_TIME == 2, then every 2 minutes, if motion hasn't been detected, an alert notification will be sent to the Android device
 #define EMERGENCY_ALERT_TIME 2
 
 BluetoothSerial bluetooth;
-BLECharacteristic* characteristic;
+BLECharacteristic* characteristic;  // This is a handle to the main system's main data BLE characteristic that the Android app will retrieve it's data from
+
+// This is a handle to the BLE characteristic that the subsystem will write the room's occupation status to
+// The main system will use this characteristic in combination with time since last detection to determine if an emergency alert should be sent
 BLECharacteristic* subsystemCharacteristic;
+
+// Pointer to BLEAdvertising object that will be used to start and stop the advertising of the main system's BLE service and characteristics as needed
 BLEAdvertising* advertising;
 
 // Tracks the number of devices connected to this main system (via BLE)
+// By default, there should at least be one BLE connection at all times (the subsystem) and the main system should not be advertising
+// When an emergency alert needs to be sent, the main system will start advertising, and the Android device should pick up the main system on it's scan and connect
 int connectedDevices = 0;
 
 ////////////////////////////////////////////////////////////////////////////////////////
 // Pin setup for sensors
 ////////////////////////////////////////////////////////////////////////////////////////
 const int motionSensorInputPin = 14;
-const int trigPin = 2;
-const int echoPin = 15;
+const int trigPin = 2;  // ultrasonic sensor trigger pin
+const int echoPin = 15; // ultrasonic sensor echo pin
 const int vibrationInputPin = 36;
+
+// Right now, the sound sensor isn't used in the main system
 const int soundInputPin = 26;
 const int soundGatePin = 27;
 
@@ -100,7 +116,7 @@ void MyServerCallbacks::onDisconnect(BLEServer* server) {
 
 
 ////////////////////////////////////////////////////////////////////////////////////////
-// calibration time for the sensors to be calibrated
+// calibration time (in seconds) for the sensors to be calibrated
 ////////////////////////////////////////////////////////////////////////////////////////
 const int calibrationTime = 30;
 
@@ -144,15 +160,72 @@ unsigned int minutes = 0;     // minutes that have passed since last detection
 unsigned int alertMinutes = 0; // this will determine when an alert will be sent (if it's equal to or greater than EMERGENCY_ALERT_TIME
 
 ////////////////////////////////////////////////////////////////////////////////////////
-// Global boolean variable indicating the occupation status of the room
-////////////////////////////////////////////////////////////////////////////////////////
-
-////////////////////////////////////////////////////////////////////////////////////////
 // JSON Object we will send to the Bluetooth app. It keeps track of the status as well as time since last detection
 ////////////////////////////////////////////////////////////////////////////////////////
 StaticJsonDocument<300> jsonData;
 String stringData;
 
+
+////////////////////////////////////////////////////////////////////////////////////////
+// Motion Buffer class to store last 500 sensor readings from the motion sensor (work in progress)
+////////////////////////////////////////////////////////////////////////////////////////
+
+enum class BufferResult {
+  NO_ALERT,
+  SEND_ALERT
+};
+
+class MotionBuffer {
+  private:
+  int buffer[MOTION_BUFFER_SIZE];
+  int current_index = 0;
+  bool full = false;
+  public:
+  void appendReading(int value);
+  void clear();
+  bool isFull() const;
+  BufferResult processBuffer();
+};
+
+void MotionBuffer::appendReading(int value) {
+  buffer[current_index] = value;
+  current_index++;
+  if (current_index >= MOTION_BUFFER_SIZE) {
+    full = true;
+  }
+}
+
+void MotionBuffer::clear() {
+  for (int i = 0; i < MOTION_BUFFER_SIZE; i++) {
+    buffer[i] = int();
+  }
+  current_index = 0;
+}
+
+bool MotionBuffer::isFull() const { return full; }
+
+BufferResult MotionBuffer::processBuffer() {
+  int num_high_readings = 0;
+  for (int i = 0; i < MOTION_BUFFER_SIZE; i++) {
+    switch(buffer[i]) {
+      case 0 : {
+        break;
+      }
+      case 1 : {
+        num_high_readings++;
+        break;
+      }
+    }
+  }
+  if (num_high_readings < MOTION_BUFFER_CUTOFF) {
+    return BufferResult::SEND_ALERT;
+  } else {
+    return BufferResult::NO_ALERT;
+  }
+  clear();
+}
+
+MotionBuffer motion_buffer;
 
 ////////////////////////////////////////////////////////////////////////////////////////
 // BLE Response Class for parsing the response from the subsystem characteristic and setting room occupied status
@@ -177,22 +250,27 @@ class BLEResponse {
   }
   bool getOccupied() { return isOccupied; }
 };
+
 BLEResponse parser;
 
 
 ////////////////////////////////////////////////////////////////////////////////////////
+// TempAdvertise interface that can be implemented to determine what the behavior of starting BLE advertising should be
 ////////////////////////////////////////////////////////////////////////////////////////
 class TempAdvertise {
   public:
-  virtual void onTempAdvertising(long milliseconds) = 0;
+  virtual void onTempAdvertising(unsigned long milliseconds) = 0;
 };
 
+
+// Class that implements TempAdvertise
 class MyTempAdvertise: public TempAdvertise {
   public:
-  void onTempAdvertising(long milliseconds) override;
+  void onTempAdvertising(unsigned long milliseconds) override;
 };
 
-void MyTempAdvertise::onTempAdvertising(long milliseconds) {
+// Start advertising, wait for the specified number of milliseconds, then stop advertising
+void MyTempAdvertise::onTempAdvertising(unsigned long milliseconds) {
   advertising->start();
   delay(milliseconds);
   advertising->stop();
@@ -203,8 +281,7 @@ void startTempAdvertising(TempAdvertise* tempAdvertise) {
 }
 
 MyTempAdvertise* tempAdvertiseCallback = new MyTempAdvertise();
-////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////
+
 
 // Helper method that takes a String message to set the main system's characteristic's value
 // We convert the message into an array of bytes before setting the value, which will be translated to proper characters by the ESP32 via UTF-8
@@ -248,12 +325,16 @@ void setup() {
   vibrationSensor->setup();
   light_module.begin();
 
+  // Initializing I2C (the vibration and light sensor uses I2C)
   Wire.begin();
 
   Serial.begin(115200);
   Serial.println("Starting BLE setup...");
+
+  // Initialize BLE for the main system with the name "ESP32"
   BLEDevice::init("ESP32");
-  
+
+  // Creating the BLEServer that will hold all of the necessary BLE services and characteristics
   BLEServer* server = BLEDevice::createServer();
   server->setCallbacks(new MyServerCallbacks());
   BLEService* service = server->createService(SERVICE_UUID);
@@ -274,8 +355,11 @@ void setup() {
   subsystemDescriptor.setValue(subsystemDescriptorValue, 2);
   subsystemCharacteristic->addDescriptor(&subsystemDescriptor);
   characteristic->addDescriptor(&descriptor);
+
+  // Starting the BLE service that holds the two BLECharacteristics
   service->start();
 
+  // Obtain a handle to BLEAdvertising here and start advertising
   advertising = BLEDevice::getAdvertising();
   advertising->addServiceUUID(SERVICE_UUID);
   advertising->setScanResponse(true);
@@ -293,22 +377,30 @@ void setup() {
   }
   Serial.println(" done");
   Serial.println("SENSOR ACTIVE");
+
+  // Start the light and vibration sensors on a separate thread on core 0
   xTaskCreatePinnedToCore(lightTask, "LightTask", 10000, NULL, 0, NULL, 0);
   //xTaskCreatePinnedToCore(soundTask, "SoundTask", 10000, NULL, 0, NULL, 0);
   xTaskCreatePinnedToCore(vibrationTask, "VibrationTask", 10000, NULL, 0, NULL, 0);
 }
 
 void loop() {
+  // Motion and ultrasonic sensor are running on the main thread (on core 1)
   motionSensor->start();
   ultrasonicSensor->start();
 
+  // Obtain the number of currently "active" sensors
+  // Active means that the sensor has individually concluded that there is human presence/motion within the room
   int activeSensors = motionSensor->isActive() + ultrasonicSensor->isActive() + lightSensor->isActive();
 
   // Read the subsystem characteristic value every loop. The String value could potentially change after a write from the subsystem
   parser.parseResponse(subsystemCharacteristic->getValue());
+
+  
   Serial.print("Light Sensor Baseline: ");
   Serial.println(lightSensor->baseline());
 
+  // Setting the key value pairs for the JSON that will be sent to the main sensor data BLE characteristic
   // Boolean Data
   jsonData["motion"] = motionSensor->isActive();
   jsonData["proximity"] = ultrasonicSensor->isActive();
@@ -340,37 +432,18 @@ void loop() {
     minutes = 0;
     alertMinutes = 0;
 
-    //    if (previousMessage != "Person is present") {
-    //        jsonData["status"] = "Person is present";
-    //        jsonData["lastDetected"] = 0;
-    //        serializeJson(jsonData, stringData);
-    //        sendBluetoothMessage(stringData, characteristic);
-    //        previousMessage = "Person is present";
-    //    }
-
     jsonData["movement_status"] = "Person is present";
     jsonData["lastDetected"] = 0;
     serializeJson(jsonData, stringData);
     sendBluetoothMessage(stringData, characteristic);
     previousMessage = "Person is present";
 
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
-    // All sensors read low (person is absent or not being detected for an extended period of time)
-    /////////////////////////////////////////////////////////////////////////////////////////////////////
+  /////////////////////////////////////////////////////////////////////////////////////////////////////
+  // All sensors read low (person is absent or not being detected for an extended period of time)
+  /////////////////////////////////////////////////////////////////////////////////////////////////////
   } else {
     lastDetected = ((millis() - timeOfDetection) / 1000); // keeps track of time since last detection in seconds
     jsonData["movement_status"] = "Not present";
-
-    // This if statement will be called when first transitioning from "Person detected" to "Not present"
-    // Commented out for testing
-    //    if (previousMessage != "Not Present") {
-    //        jsonData["lastDetected"] = minutes;
-    //        serializeJson(jsonData, stringData);
-    //        sendBluetoothMessage(stringData, characteristic);
-    //        Serial.println(stringData);
-    //        previousMessage = "Not present";
-    //        appendFile("data.txt", stringData.c_str());
-    //    }
 
     jsonData["lastDetected"] = minutes;
     serializeJson(jsonData, stringData);
@@ -384,6 +457,8 @@ void loop() {
       minutes++;
       alertMinutes++;
       jsonData["lastDetected"] = minutes;
+
+      // If this statement evaluates to true, an emergency alert notification will be sent to the Android device
       if (minutes % EMERGENCY_ALERT_TIME == 0 && parser.getOccupied()) {
         // Start advertising and send an alert to the client device
         alertMinutes = 0;
