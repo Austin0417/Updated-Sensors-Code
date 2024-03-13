@@ -6,7 +6,7 @@ Below is a list of the libraries needed (install them in Arduino by going into T
 <img width="607" alt="image" src="https://github.com/Austin0417/Updated-Sensors-Code/assets/79946256/058894ca-ce47-40cd-85be-409f5cb99dfe">
 
 2. Adafruit ADXL345 by Adafruit
-<img width="607" alt="image" src="https://github.com/Austin0417/Updated-Sensors-Code/assets/79946256/73e7b45b-4329-4b98-abf4-c6eab63fe948">
+<img width="598" alt="image" src="https://github.com/Austin0417/Updated-Sensors-Code/assets/79946256/cca9b28d-4b41-43f4-8acc-5a673287e62e">
 
 3. ArduinoJSON by Benoit Blanchon
 <img width="650" alt="image" src="https://github.com/Austin0417/Updated-Sensors-Code/assets/79946256/7cfb5422-01f5-4255-93cf-48c03b7b63f3">
